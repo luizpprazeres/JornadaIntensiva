@@ -43,6 +43,69 @@ npm run dev              # http://localhost:3000
 
 O banco SQLite é criado em `app/jornada-intensiva.db` na primeira execução de `db:push`.
 
+## Acesso pelo celular
+
+O caso de uso real é ter o app rodando na sua máquina e abri-lo no celular durante o plantão. Há dois caminhos.
+
+### Opção A — Tailscale (recomendado)
+
+[Tailscale](https://tailscale.com) cria uma rede privada VPN-mesh entre seus dispositivos, cifrada, com IPs fixos do tipo `100.x.y.z`. Funciona em **qualquer rede** (hotspot do iPhone, Wi-Fi do hospital, café, casa) — incluindo redes que normalmente bloqueiam acesso entre clientes.
+
+Setup (uma vez):
+
+1. **Mac:** App Store → "Tailscale" → instalar → login com Apple ID/Google.
+2. **iPhone/Android:** App Store/Play Store → "Tailscale" → mesmo login → ativar.
+3. Pegar o IP da sua máquina na tailnet via menubar do Tailscale no Mac, ou no terminal:
+
+```bash
+tailscale ip -4
+# saída exemplo:  100.76.86.1
+```
+
+Para usar:
+
+```bash
+cd app && npm run dev:lan      # ou npm run start:lan em produção
+```
+
+No celular: `http://SEU_IP_TAILSCALE:3000` (ex.: `http://100.76.86.1:3000`). **IP fixo, nunca muda.**
+
+### Opção B — Mesma Wi-Fi local (alternativa simples)
+
+Pré-requisito: Mac e celular na **mesma Wi-Fi normal** (não hotspot do iPhone — esse bloqueia clientes entre si).
+
+```bash
+cd app && npm run dev:lan
+npm run ip                     # mostra o IP da máquina na rede atual
+# saída exemplo:  en0: http://192.168.0.42:3000
+```
+
+No celular: `http://IP_DA_REDE:3000`. **IP muda** quando você troca de rede.
+
+### Adicionar à tela inicial (PWA)
+
+Quando o app carregar no celular:
+
+- **iOS Safari:** Compartilhar ↑ → "Adicionar à Tela de Início" → nome `Jornada`.
+- **Android Chrome:** menu (⋮) → "Adicionar à tela inicial".
+
+Vira PWA standalone (sem barra do navegador), ícone `J` sépia.
+
+### Produção pessoal (mais estável que `dev`)
+
+```bash
+npm run build && npm run start:lan
+```
+
+`start` é otimizado, sem hot-reload — abre mais rápido, gasta menos bateria.
+
+### Notas operacionais
+
+- Os dados ficam **na sua máquina** (`app/jornada-intensiva.db`) — nunca saem dela.
+- Quando o Mac dorme ou desconecta da rede, o celular perde acesso. Para uso 24/7 independente da máquina, ver `ROADMAP.md` Fase 4 (self-host).
+- Em rede pública sem Tailscale, qualquer pessoa na mesma rede pode acessar `SEU_IP:3000`. Como a Fase 1 é mock-only, isso é aceitável; antes de dados reais, **use Tailscale**.
+- Backup: copiar `app/jornada-intensiva.db` periodicamente (`cp jornada-intensiva.db jornada-intensiva.db.bak`).
+
 ## Stack
 
 - **Next.js 15** (App Router, Server Actions)
