@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import {
   DocumentBlock,
@@ -19,12 +19,23 @@ type Props = {
 export function HandoffTab({ initial, generateAction }: Props) {
   const [editable, setEditable] = useState<string>(initial?.body ?? "");
   const [isPending, startTransition] = useTransition();
+  const lastSyncedIdRef = useRef<string | null>(initial?.id ?? null);
+
+  // Sincroniza o textarea quando uma NOVA HandoffNote chega (id mudou).
+  // Edições manuais do médico são preservadas até a próxima regeneração.
+  useEffect(() => {
+    const incomingId = initial?.id ?? null;
+    if (incomingId && incomingId !== lastSyncedIdRef.current) {
+      setEditable(initial?.body ?? "");
+      lastSyncedIdRef.current = incomingId;
+    }
+  }, [initial?.id, initial?.body]);
 
   const handleGenerate = () => {
     startTransition(async () => {
       await generateAction();
-      // O page.tsx refaz fetch e re-renderiza com o novo initial; aqui forçamos sync:
-      // (server action já fez revalidatePath, navegação deve atualizar initial)
+      // revalidatePath na server action retorna nova `initial` via re-render do RSC pai;
+      // o useEffect acima detecta o id novo e sincroniza o textarea automaticamente.
     });
   };
 

@@ -27,7 +27,7 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Jornada Intensiva",
   description: "Organização documental clínica por leito.",
-  icons: { icon: "/favicon.ico" },
+  // Ícone resolvido automaticamente do app/src/app/icon.svg (Next.js 15 App Router)
 };
 
 export const viewport = {

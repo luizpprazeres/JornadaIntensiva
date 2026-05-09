@@ -8,3 +8,7 @@ build
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# TS incremental build cache
+tsconfig.tsbuildinfo
+*.tsbuildinfo
