@@ -4,14 +4,17 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:lan": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start",
+    "start:lan": "next start --hostname 0.0.0.0",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "seed": "tsx src/lib/db/seed.ts"
+    "seed": "tsx src/lib/db/seed.ts",
+    "ip": "node -e \"const os=require('os');const n=os.networkInterfaces();for(const k of Object.keys(n)){for(const x of n[k]){if(x.family==='IPv4'&&!x.internal)console.log(k+': http://'+x.address+':3000')}}\""
   },
   "dependencies": {
     "better-sqlite3": "11.7.0",

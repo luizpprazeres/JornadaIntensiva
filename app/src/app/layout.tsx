@@ -27,7 +27,20 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Jornada Intensiva",
   description: "Organização documental clínica por leito.",
-  // Ícone resolvido automaticamente do app/src/app/icon.svg (Next.js 15 App Router)
+  // icon.svg e manifest.ts são resolvidos automaticamente pelo App Router.
+  // apple-touch-icon manual: a convention apple-icon do Next só aceita png/jpg, então
+  // apontamos diretamente para o SVG (iOS 11+ suporta SVG; devices antigos fazem fallback).
+  icons: {
+    apple: "/icon.svg",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Jornada",
+    statusBarStyle: "default",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export const viewport = {
