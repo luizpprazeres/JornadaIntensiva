@@ -8,7 +8,7 @@ type Props = {
 
 export async function Controls24hTab({ sources }: Props) {
   const ctrls = sources.filter((s) => s.source_type === "controls_24h");
-  const formatted = await getAI().formatControls24h({ sources });
+  const formatted = await (await getAI()).formatControls24h({ sources });
 
   return (
     <DocumentBlock

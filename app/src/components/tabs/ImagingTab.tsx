@@ -8,7 +8,7 @@ type Props = {
 
 export async function ImagingTab({ sources }: Props) {
   const images = sources.filter((s) => s.source_type === "imaging");
-  const formatted = await getAI().formatImaging({ sources });
+  const formatted = await (await getAI()).formatImaging({ sources });
 
   return (
     <DocumentBlock

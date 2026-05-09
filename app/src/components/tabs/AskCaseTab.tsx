@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 
+import type { CaseQuestion } from "@/types/domain";
 import {
   DocumentBlock,
   FieldGroup,
@@ -12,16 +13,25 @@ import {
   TextArea,
 } from "@/components/ui";
 
-type Result = { question: string; answer: string; cited: string[] };
-
 type Props = {
-  askAction: (question: string) => Promise<{ answer: string; cited: string[] }>;
+  initialHistory: CaseQuestion[];
+  askAction: (
+    question: string,
+  ) => Promise<{
+    answer: string;
+    cited: string[];
+    provider: string;
+    model: string | null;
+    questionId: string;
+  }>;
+  deleteAction: (questionId: string) => Promise<void>;
 };
 
-export function AskCaseTab({ askAction }: Props) {
+export function AskCaseTab({ initialHistory, askAction, deleteAction }: Props) {
   const [question, setQuestion] = useState("");
   const [isPending, startTransition] = useTransition();
-  const [history, setHistory] = useState<Result[]>([]);
+  const [isDeleting, startDeleteTransition] = useTransition();
+  const [history, setHistory] = useState<CaseQuestion[]>(initialHistory);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -31,12 +41,29 @@ export function AskCaseTab({ askAction }: Props) {
     const q = question.trim();
     startTransition(async () => {
       try {
-        const res = await askAction(q);
-        setHistory((prev) => [{ question: q, answer: res.answer, cited: res.cited }, ...prev].slice(0, 10));
+        const result = await askAction(q);
+        const newItem: CaseQuestion = {
+          id: result.questionId,
+          patient_case_id: "",
+          question: q,
+          answer: result.answer,
+          cited_source_ids: result.cited,
+          provider: result.provider,
+          model: result.model,
+          asked_at: new Date(),
+        };
+        setHistory((prev) => [newItem, ...prev]);
         setQuestion("");
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Erro ao consultar o caso");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Erro ao consultar o caso");
       }
+    });
+  };
+
+  const handleDelete = (questionId: string) => {
+    startDeleteTransition(async () => {
+      await deleteAction(questionId);
+      setHistory((prev) => prev.filter((item) => item.id !== questionId));
     });
   };
 
@@ -64,25 +91,42 @@ export function AskCaseTab({ askAction }: Props) {
 
       {error && <p className="mt-3 text-doc-sm text-clinical-alert">Erro: {error}</p>}
 
-      {history.length > 0 && <SectionDivider label="histórico desta sessão" />}
+      {history.length > 0 && <SectionDivider label="histórico" />}
 
       <ul className="space-y-6">
-        {history.map((item, idx) => (
-          <li key={idx} className="border-l-2 border-paper-300 pl-4">
-            <p className="doc-smallcaps text-doc-xs text-ink-500">PERGUNTA</p>
+        {history.map((item) => (
+          <li key={item.id} className="border-l-2 border-paper-300 pl-4">
+            <div className="flex items-start justify-between gap-2">
+              <p className="doc-smallcaps text-doc-xs text-ink-500">PERGUNTA</p>
+              <button
+                type="button"
+                onClick={() => handleDelete(item.id)}
+                disabled={isDeleting}
+                className="shrink-0 text-doc-xs text-ink-400 hover:text-clinical-alert transition-colors disabled:opacity-40"
+              >
+                remover
+              </button>
+            </div>
             <p className="font-serif text-doc-base text-ink-900">{item.question}</p>
+
             <p className="mt-3 doc-smallcaps text-doc-xs text-ink-500">RESPOSTA</p>
             <MonoBlock className="text-doc-sm">{item.answer}</MonoBlock>
-            {item.cited.length > 0 && (
+
+            {item.cited_source_ids.length > 0 && (
               <MetaLine className="mt-2">
                 Fontes citadas:{" "}
-                {item.cited.map((id) => (
+                {item.cited_source_ids.map((id) => (
                   <code key={id} className="ml-1 doc-mono text-doc-xs">
                     #{id}
                   </code>
                 ))}
               </MetaLine>
             )}
+
+            <p className="mt-1 text-doc-xs italic text-ink-400">
+              {item.provider}
+              {item.model ? ` · ${item.model}` : ""}
+            </p>
           </li>
         ))}
       </ul>

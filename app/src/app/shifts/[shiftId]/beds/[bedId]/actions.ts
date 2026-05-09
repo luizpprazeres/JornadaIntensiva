@@ -4,12 +4,15 @@ import { revalidatePath } from "next/cache";
 
 import { getAI } from "@/lib/ai";
 import {
+  createCaseQuestion,
   createHandoff,
   createPending,
   createReview,
   createSource,
+  deleteCaseQuestion,
   deleteSource,
   getPatientCase,
+  getSnapshot,
   listSources,
   togglePending,
   updateSource,
@@ -92,9 +95,18 @@ export async function regenerateSnapshotAction(
   patientCaseId: string,
 ): Promise<void> {
   const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
-  const ai = getAI();
-  const snapshotInput = await ai.generateClinicalSnapshot({ patientCase, sources });
-  await upsertSnapshot(patientCaseId, snapshotInput);
+  const ai = await getAI();
+
+  // Geração paralela: snapshot + divergências.
+  const [snapshotInput, divergenceResult] = await Promise.all([
+    ai.generateClinicalSnapshot({ patientCase, sources }),
+    ai.detectDivergences({ patientCase, sources }),
+  ]);
+
+  await upsertSnapshot(patientCaseId, {
+    ...snapshotInput,
+    divergences: divergenceResult.divergences,
+  });
   revalidatePath(bedPath(shiftId, patientCaseId));
 }
 
@@ -103,15 +115,23 @@ export async function generateHandoffAction(
   patientCaseId: string,
 ): Promise<void> {
   const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
-  const ai = getAI();
-  const body = await ai.generateHandoff({ patientCase, sources });
-  await createHandoff(patientCaseId, body);
+  const snapshot = await getSnapshot(patientCaseId);
+  const ai = await getAI();
+  const result = await ai.generateHandoff({ patientCase, sources, snapshot });
+  await createHandoff(patientCaseId, {
+    body: result.body,
+    cited_source_ids: result.cited,
+    provider: result.provider,
+    model: result.model,
+  });
   revalidatePath(bedPath(shiftId, patientCaseId));
 }
 
-export async function generateFamilySummaryAction(patientCaseId: string): Promise<string> {
+export async function generateFamilySummaryAction(
+  patientCaseId: string,
+): Promise<{ body: string; cited: string[]; provider: string; model: string | null }> {
   const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
-  const ai = getAI();
+  const ai = await getAI();
   return ai.generateFamilySummary({ patientCase, sources });
 }
 
@@ -120,19 +140,54 @@ export async function generatePrescriptionReviewAction(
   patientCaseId: string,
 ): Promise<void> {
   const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
-  const ai = getAI();
-  const items = await ai.generatePrescriptionChecklist({ patientCase, sources });
-  await createReview(patientCaseId, items);
+  const ai = await getAI();
+  const result = await ai.generatePrescriptionChecklist({ patientCase, sources });
+  await createReview(patientCaseId, {
+    items: result.items,
+    cited_source_ids: result.cited,
+    provider: result.provider,
+    model: result.model,
+  });
   revalidatePath(bedPath(shiftId, patientCaseId));
 }
 
 export async function askCaseAction(
   patientCaseId: string,
   question: string,
-): Promise<{ answer: string; cited: string[] }> {
+): Promise<{ answer: string; cited: string[]; provider: string; model: string | null; questionId: string }> {
   const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
-  const ai = getAI();
-  return ai.askCase({ patientCase, sources, question });
+  const ai = await getAI();
+  const result = await ai.askCase({ patientCase, sources, question });
+
+  // Persiste a Q&A no histórico do leito (F2.7).
+  const persisted = await createCaseQuestion(patientCaseId, {
+    question,
+    answer: result.answer,
+    cited_source_ids: result.cited,
+    provider: result.provider,
+    model: result.model,
+  });
+
+  revalidatePath(bedPath(shiftId(patientCase), patientCaseId));
+
+  return {
+    answer: result.answer,
+    cited: result.cited,
+    provider: result.provider,
+    model: result.model,
+    questionId: persisted.id,
+  };
+}
+
+function shiftId(patientCase: { shift_id: string }): string {
+  return patientCase.shift_id;
+}
+
+export async function deleteCaseQuestionAction(
+  patientCaseId: string,
+  questionId: string,
+): Promise<void> {
+  await deleteCaseQuestion(patientCaseId, questionId);
 }
 
 export async function addPendingAction(

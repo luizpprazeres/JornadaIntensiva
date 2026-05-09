@@ -26,6 +26,8 @@ import {
   getPatientCase,
   getShift,
   getSnapshot,
+  listCaseQuestions,
+  listSnapshotHistory,
   listSources,
 } from "@/lib/repos";
 import { formatDateTimeBR } from "@/lib/utils/format";
@@ -33,6 +35,7 @@ import { formatDateTimeBR } from "@/lib/utils/format";
 import {
   addSourceAction,
   askCaseAction,
+  deleteCaseQuestionAction,
   deleteSourceAction,
   generateFamilySummaryAction,
   generateHandoffAction,
@@ -53,11 +56,13 @@ export default async function BedPage({ params, searchParams }: PageProps) {
   const [shift, patientCase] = await Promise.all([getShift(shiftId), getPatientCase(bedId)]);
   if (!shift || !patientCase || patientCase.shift_id !== shiftId) notFound();
 
-  const [sources, snapshot, handoff, review] = await Promise.all([
+  const [sources, snapshot, handoff, review, snapshotHistory, questionHistory] = await Promise.all([
     listSources(bedId),
     getSnapshot(bedId),
     getLatestHandoff(bedId),
     getLatestReview(bedId),
+    listSnapshotHistory(bedId),
+    listCaseQuestions(bedId, 10),
   ]);
 
   const basePath = `/shifts/${shiftId}/beds/${bedId}`;
@@ -90,6 +95,10 @@ export default async function BedPage({ params, searchParams }: PageProps) {
   const ask = async (question: string) => {
     "use server";
     return askCaseAction(bedId, question);
+  };
+  const deleteQ = async (questionId: string) => {
+    "use server";
+    await deleteCaseQuestionAction(bedId, questionId);
   };
 
   return (
@@ -140,6 +149,8 @@ export default async function BedPage({ params, searchParams }: PageProps) {
               <SummaryTab
                 patientCase={patientCase}
                 snapshot={snapshot}
+                history={snapshotHistory}
+                divergences={snapshot?.divergences ?? []}
                 regenerateAction={regenerate}
               />
             )}
@@ -161,7 +172,13 @@ export default async function BedPage({ params, searchParams }: PageProps) {
             {activeTab === "passagem" && (
               <HandoffTab initial={handoff} generateAction={handoffGen} />
             )}
-            {activeTab === "perguntar" && <AskCaseTab askAction={ask} />}
+            {activeTab === "perguntar" && (
+              <AskCaseTab
+                askAction={ask}
+                deleteAction={deleteQ}
+                initialHistory={questionHistory}
+              />
+            )}
           </div>
         </Sheet>
       </PageContainer>

@@ -1,6 +1,7 @@
 import type { ClinicalAI, ClinicalSnapshotInput } from "@/lib/ai";
 import type {
   ClinicalSnapshot,
+  Divergence,
   PatientCase,
   PrescriptionReviewItem,
   SourceDocument,
@@ -263,7 +264,7 @@ function appendDivergenceNote(value: string, sources: SourceDocument[], keywords
 }
 
 function generateSnapshotFromSources(sources: SourceDocument[]): ClinicalSnapshotInput {
-  return fieldRules.reduce<ClinicalSnapshotInput>(
+  const clinicalFields = fieldRules.reduce(
     (snapshot, rule) => ({
       ...snapshot,
       [rule.field]: appendDivergenceNote(firstExtract(sources, rule.keywords), sources, rule.keywords),
@@ -286,11 +287,19 @@ function generateSnapshotFromSources(sources: SourceDocument[]): ClinicalSnapsho
       plan: missing,
     },
   );
+
+  return {
+    ...clinicalFields,
+    cited_source_ids: sources.map((s) => s.id),
+    divergences: [],
+    provider: "heuristic",
+    model: null,
+  };
 }
 
 function snapshotToInput(snapshot: ClinicalSnapshot): ClinicalSnapshotInput {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id, patient_case_id, updated_at, ...input } = snapshot;
+  const { id, patient_case_id, updated_at, version, ...input } = snapshot;
   return input;
 }
 
@@ -395,6 +404,9 @@ function scoreLine(line: string, tokens: string[]): number {
 
 export function createHeuristicAI(): ClinicalAI {
   return {
+    providerName: "heuristic",
+    modelName: null,
+
     async generateClinicalSnapshot({ patientCase, sources }) {
       assertSinglePatientCase(patientCase, sources);
       return generateSnapshotFromSources(sources);
@@ -404,7 +416,7 @@ export function createHeuristicAI(): ClinicalAI {
       assertSinglePatientCase(patientCase, sources);
       const data = snapshot ? snapshotToInput(snapshot) : generateSnapshotFromSources(sources);
 
-      return [
+      const body = [
         limitation,
         `Leito ${present(patientCase.bed_label)} – ${present(patientCase.patient_name_or_identifier)}, ${present(patientCase.age)}a, adm. ${pt(patientCase.admission_date)}.`,
         `Motivo de admissão | diagnóstico principal: ${present(data.main_diagnosis)}.`,
@@ -414,6 +426,13 @@ export function createHeuristicAI(): ClinicalAI {
         `Plano: ${present(data.plan)}.`,
         `Pendências: ${present(data.pending_items)}.`,
       ].join(" ");
+
+      return {
+        body,
+        cited: sources.map((s) => s.id),
+        provider: "heuristic",
+        model: null,
+      };
     },
 
     async generateFamilySummary({ patientCase, sources }) {
@@ -426,18 +445,25 @@ export function createHeuristicAI(): ClinicalAI {
         .join("; ");
       const next = snapshot.pending_items !== missing ? snapshot.pending_items : snapshot.plan;
 
-      return [
+      const body = [
         limitation,
         `O paciente está internado por ${diagnosis === missing || !diagnosis ? "informações ainda em coleta" : diagnosis}.`,
         `Atualmente ${status === missing || !status ? "as informações clínicas ainda estão em coleta" : status}.`,
         `As medidas em curso são ${measures || "informações ainda em coleta"}.`,
         `Os próximos dias: monitorar ${next === missing ? "informações ainda em coleta" : next}.`,
       ].join(" ");
+
+      return {
+        body,
+        cited: sources.map((s) => s.id),
+        provider: "heuristic",
+        model: null,
+      };
     },
 
     async generatePrescriptionChecklist({ patientCase, sources }) {
       assertSinglePatientCase(patientCase, sources);
-      return prescriptionCategories.map<PrescriptionReviewItem>(({ category, keywords }) => {
+      const items = prescriptionCategories.map<PrescriptionReviewItem>(({ category, keywords }) => {
         const knownStatus = firstExtract(sources, keywords);
         const found = knownStatus !== missing;
 
@@ -447,6 +473,13 @@ export function createHeuristicAI(): ClinicalAI {
           gap: found ? "verificar" : "item ausente",
         };
       });
+
+      return {
+        items,
+        cited: sources.map((s) => s.id),
+        provider: "heuristic",
+        model: null,
+      };
     },
 
     async formatLaboratory({ sources }) {
@@ -566,7 +599,12 @@ export function createHeuristicAI(): ClinicalAI {
       const tokens = tokenize(question);
 
       if (tokens.length === 0) {
-        return { answer: "Não encontrado nas fontes deste leito.", cited: [] };
+        return {
+          answer: "Não encontrado nas fontes deste leito.",
+          cited: [],
+          provider: "heuristic",
+          model: null,
+        };
       }
 
       const scored = sources
@@ -582,13 +620,74 @@ export function createHeuristicAI(): ClinicalAI {
         .slice(0, 3);
 
       if (scored.length === 0) {
-        return { answer: "Não encontrado nas fontes deste leito.", cited: [] };
+        return {
+          answer: "Não encontrado nas fontes deste leito.",
+          cited: [],
+          provider: "heuristic",
+          model: null,
+        };
       }
 
       const cited = Array.from(new Set(scored.map((item) => item.source.id)));
       const answer = `${limitation} Trechos encontrados: ${scored.map((item) => item.line).join(" | ")}`;
 
-      return { answer, cited };
+      return {
+        answer,
+        cited,
+        provider: "heuristic",
+        model: null,
+      };
+    },
+
+    async detectDivergences({ patientCase, sources }) {
+      assertSinglePatientCase(patientCase, sources);
+
+      // Heurística: tópicos clínicos comuns + verificar se há linhas com negação
+      // contraditória sobre o mesmo termo em fontes diferentes.
+      const TOPICS: Array<{ topic: string; keywords: string[] }> = [
+        { topic: "Drogas vasoativas", keywords: ["noradrenalina", "vasopressina", "dobutamina"] },
+        { topic: "Antibióticos", keywords: ["meropenem", "vancomicina", "tazocin", "cefepime", "ceftriaxona"] },
+        { topic: "Sedação", keywords: ["midazolam", "fentanil", "propofol", "dexmedetomidina"] },
+        { topic: "Ventilação mecânica", keywords: ["vm", "tubo orotraqueal", "tot", "extubação"] },
+        { topic: "Diálise", keywords: ["hemodiálise", "diálise", "tsr", "hd"] },
+        { topic: "Nutrição", keywords: ["dieta", "tne", "tnp", "jejum"] },
+      ];
+
+      const divergences: Divergence[] = [];
+
+      for (const { topic, keywords } of TOPICS) {
+        const sourceMatches = sources.flatMap((src) => {
+          const lines = src.raw_text.split(/\r?\n/).map((l) => l.trim());
+          const matches = lines.filter((l) => {
+            const lower = l.toLocaleLowerCase("pt-BR");
+            return keywords.some((k) => lower.includes(k));
+          });
+          return matches.map((line) => ({ sourceId: src.id, line }));
+        });
+
+        if (sourceMatches.length < 2) continue;
+
+        const negative = sourceMatches.filter(({ line }) =>
+          /\b(suspens[oa]|sem|nega(?:do|da)?|ausente|desligad[oa]|retirad[oa]|n[ãa]o\s)\b/i.test(line),
+        );
+        const positive = sourceMatches.filter(({ line }) => !negative.includes({ ...{ sourceId: "", line: "" } } as never)
+          && !/\b(suspens[oa]|sem|nega(?:do|da)?|ausente|desligad[oa]|retirad[oa]|n[ãa]o\s)\b/i.test(line));
+
+        if (negative.length > 0 && positive.length > 0) {
+          const sourceIds = Array.from(
+            new Set([...negative.map((m) => m.sourceId), ...positive.map((m) => m.sourceId)]),
+          );
+          if (sourceIds.length >= 2) {
+            divergences.push({
+              topic,
+              description: `Possível divergência: "${negative[0].line}" vs "${positive[0].line}"`,
+              source_ids: sourceIds.slice(0, 4),
+            });
+          }
+        }
+      }
+
+      return { divergences, provider: "heuristic", model: null };
     },
   };
 }

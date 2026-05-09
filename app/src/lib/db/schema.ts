@@ -82,6 +82,17 @@ export const clinicalSnapshots = sqliteTable("clinical_snapshots", {
   latest_controls: text("latest_controls").notNull(),
   pending_items: text("pending_items").notNull(),
   plan: text("plan").notNull(),
+  cited_source_ids: text("cited_source_ids", { mode: "json" })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  divergences: text("divergences", { mode: "json" })
+    .$type<Array<{ topic: string; description: string; source_ids: string[] }>>()
+    .notNull()
+    .default([]),
+  provider: text("provider").notNull().default("heuristic"),
+  model: text("model"),
+  version: integer("version").notNull().default(1),
   updated_at: updatedAt(),
 });
 
@@ -91,8 +102,14 @@ export const prescriptionReviews = sqliteTable("prescription_reviews", {
     .notNull()
     .references(() => patientCases.id, { onDelete: "cascade" }),
   items: text("items", { mode: "json" })
-    .$type<Array<{ category: string; known_status: string; gap: string }>>()
+    .$type<Array<{ category: string; known_status: string; gap: string; cited?: string[] }>>()
     .notNull(),
+  cited_source_ids: text("cited_source_ids", { mode: "json" })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  provider: text("provider").notNull().default("heuristic"),
+  model: text("model"),
   generated_at: integer("generated_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -104,6 +121,12 @@ export const handoffNotes = sqliteTable("handoff_notes", {
     .notNull()
     .references(() => patientCases.id, { onDelete: "cascade" }),
   body: text("body").notNull(),
+  cited_source_ids: text("cited_source_ids", { mode: "json" })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  provider: text("provider").notNull().default("heuristic"),
+  model: text("model"),
   generated_at: integer("generated_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -117,6 +140,65 @@ export const pendingItems = sqliteTable("pending_items", {
   description: text("description").notNull(),
   resolved: integer("resolved", { mode: "boolean" }).notNull().default(false),
   created_at: createdAt(),
+});
+
+/**
+ * Histórico de Q&A "Perguntar ao caso" (Fase 2 — F2.7).
+ * Persistido para auditoria e contexto longitudinal por leito.
+ */
+export const caseQuestions = sqliteTable("case_questions", {
+  id: id(),
+  patient_case_id: text("patient_case_id")
+    .notNull()
+    .references(() => patientCases.id, { onDelete: "cascade" }),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  cited_source_ids: text("cited_source_ids", { mode: "json" })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  provider: text("provider").notNull(), // 'heuristic' | 'openai' | ...
+  model: text("model"), // ex: 'gpt-4.1'
+  asked_at: integer("asked_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+/**
+ * Histórico de versões da ficha viva (Fase 2 — F2.8).
+ * Toda regeneração de ClinicalSnapshot grava a versão anterior aqui.
+ * Auditoria + diff longitudinal.
+ */
+export const clinicalSnapshotsHistory = sqliteTable("clinical_snapshots_history", {
+  id: id(),
+  patient_case_id: text("patient_case_id")
+    .notNull()
+    .references(() => patientCases.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(), // sequencial por leito (1, 2, 3...)
+  main_diagnosis: text("main_diagnosis").notNull(),
+  active_problems: text("active_problems").notNull(),
+  respiratory_status: text("respiratory_status").notNull(),
+  hemodynamic_status: text("hemodynamic_status").notNull(),
+  renal_status: text("renal_status").notNull(),
+  infectious_status: text("infectious_status").notNull(),
+  nutrition_status: text("nutrition_status").notNull(),
+  antibiotics: text("antibiotics").notNull(),
+  vasoactive_drugs: text("vasoactive_drugs").notNull(),
+  sedation_analgesia: text("sedation_analgesia").notNull(),
+  devices: text("devices").notNull(),
+  latest_labs: text("latest_labs").notNull(),
+  latest_controls: text("latest_controls").notNull(),
+  pending_items: text("pending_items").notNull(),
+  plan: text("plan").notNull(),
+  cited_source_ids: text("cited_source_ids", { mode: "json" })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  provider: text("provider").notNull(),
+  model: text("model"),
+  generated_at: integer("generated_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
 });
 
 export const shiftsRelations = relations(shifts, ({ many }) => ({
@@ -133,6 +215,8 @@ export const patientCasesRelations = relations(patientCases, ({ one, many }) => 
   prescriptionReviews: many(prescriptionReviews),
   handoffNotes: many(handoffNotes),
   pendingItems: many(pendingItems),
+  caseQuestions: many(caseQuestions),
+  snapshotHistory: many(clinicalSnapshotsHistory),
 }));
 
 export const sourceDocumentsRelations = relations(sourceDocuments, ({ one }) => ({
@@ -166,6 +250,20 @@ export const handoffNotesRelations = relations(handoffNotes, ({ one }) => ({
 export const pendingItemsRelations = relations(pendingItems, ({ one }) => ({
   patientCase: one(patientCases, {
     fields: [pendingItems.patient_case_id],
+    references: [patientCases.id],
+  }),
+}));
+
+export const caseQuestionsRelations = relations(caseQuestions, ({ one }) => ({
+  patientCase: one(patientCases, {
+    fields: [caseQuestions.patient_case_id],
+    references: [patientCases.id],
+  }),
+}));
+
+export const clinicalSnapshotsHistoryRelations = relations(clinicalSnapshotsHistory, ({ one }) => ({
+  patientCase: one(patientCases, {
+    fields: [clinicalSnapshotsHistory.patient_case_id],
     references: [patientCases.id],
   }),
 }));

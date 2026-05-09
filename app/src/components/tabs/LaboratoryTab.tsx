@@ -8,7 +8,7 @@ type Props = {
 
 export async function LaboratoryTab({ sources }: Props) {
   const labs = sources.filter((s) => s.source_type === "laboratory");
-  const formatted = await getAI().formatLaboratory({ sources });
+  const formatted = await (await getAI()).formatLaboratory({ sources });
 
   return (
     <DocumentBlock

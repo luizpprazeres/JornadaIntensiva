@@ -14,6 +14,7 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "seed": "tsx src/lib/db/seed.ts",
+    "smoke:llm": "tsx --env-file=.env.local scripts/smoke-llm.ts",
     "ip": "node -e \"const os=require('os');const n=os.networkInterfaces();for(const k of Object.keys(n)){for(const x of n[k]){if(x.family==='IPv4'&&!x.internal)console.log(k+': http://'+x.address+':3000')}}\""
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "drizzle-orm": "0.38.3",
     "nanoid": "5.0.9",
     "next": "15.1.4",
+    "openai": "^6.37.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "tailwind-merge": "2.6.0",

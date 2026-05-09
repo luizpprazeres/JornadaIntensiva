@@ -3,7 +3,9 @@ import { z } from "zod";
 
 import { db } from "@/lib/db/client";
 import {
+  caseQuestions,
   clinicalSnapshots,
+  clinicalSnapshotsHistory,
   handoffNotes,
   patientCases,
   pendingItems,
@@ -13,12 +15,13 @@ import {
 } from "@/lib/db/schema";
 import {
   SOURCE_TYPES,
+  type CaseQuestion,
   type ClinicalSnapshot,
+  type ClinicalSnapshotHistoryEntry,
   type HandoffNote,
   type PatientCase,
   type PendingItem,
   type PrescriptionReview,
-  type PrescriptionReviewItem,
   type Shift,
   type SourceDocument,
   type SourceType,
@@ -71,6 +74,12 @@ export const sourceDocumentUpdateSchema = sourceDocumentCreateSchema
   .omit({ patient_case_id: true })
   .partial();
 
+export const divergenceSchema = z.object({
+  topic: z.string(),
+  description: z.string(),
+  source_ids: z.array(z.string()),
+});
+
 export const clinicalSnapshotSchema = z.object({
   main_diagnosis: z.string(),
   active_problems: z.string(),
@@ -87,20 +96,39 @@ export const clinicalSnapshotSchema = z.object({
   latest_controls: z.string(),
   pending_items: z.string(),
   plan: z.string(),
+  cited_source_ids: z.array(z.string()).default([]),
+  divergences: z.array(divergenceSchema).default([]),
+  provider: z.string().default("heuristic"),
+  model: z.string().nullable().default(null),
 });
 
 export const prescriptionReviewItemSchema = z.object({
   category: z.string(),
   known_status: z.string(),
   gap: z.string(),
+  cited: z.array(z.string()).optional(),
 });
 
 export const prescriptionReviewCreateSchema = z.object({
   items: z.array(prescriptionReviewItemSchema),
+  cited_source_ids: z.array(z.string()).default([]),
+  provider: z.string().default("heuristic"),
+  model: z.string().nullable().default(null),
 });
 
 export const handoffNoteCreateSchema = z.object({
   body: z.string().min(1),
+  cited_source_ids: z.array(z.string()).default([]),
+  provider: z.string().default("heuristic"),
+  model: z.string().nullable().default(null),
+});
+
+export const caseQuestionCreateSchema = z.object({
+  question: z.string().trim().min(1),
+  answer: z.string().min(1),
+  cited_source_ids: z.array(z.string()).default([]),
+  provider: z.string().default("heuristic"),
+  model: z.string().nullable().default(null),
 });
 
 export const pendingItemCreateSchema = z.object({
@@ -338,23 +366,67 @@ export async function upsertSnapshot(
   const parsed = clinicalSnapshotSchema.parse(data);
   const timestamp = now();
 
+  // Antes de sobrescrever, copiar snapshot atual para history (Fase 2 — F2.8).
+  const existing = await getSnapshot(patientCaseId);
+  if (existing) {
+    await db.insert(clinicalSnapshotsHistory).values({
+      patient_case_id: patientCaseId,
+      version: existing.version,
+      main_diagnosis: existing.main_diagnosis,
+      active_problems: existing.active_problems,
+      respiratory_status: existing.respiratory_status,
+      hemodynamic_status: existing.hemodynamic_status,
+      renal_status: existing.renal_status,
+      infectious_status: existing.infectious_status,
+      nutrition_status: existing.nutrition_status,
+      antibiotics: existing.antibiotics,
+      vasoactive_drugs: existing.vasoactive_drugs,
+      sedation_analgesia: existing.sedation_analgesia,
+      devices: existing.devices,
+      latest_labs: existing.latest_labs,
+      latest_controls: existing.latest_controls,
+      pending_items: existing.pending_items,
+      plan: existing.plan,
+      cited_source_ids: existing.cited_source_ids,
+      provider: existing.provider,
+      model: existing.model,
+      generated_at: existing.updated_at,
+    });
+  }
+
+  const nextVersion = (existing?.version ?? 0) + 1;
+
   return first(
     await db
       .insert(clinicalSnapshots)
       .values({
         patient_case_id: patientCaseId,
         ...parsed,
+        version: nextVersion,
         updated_at: timestamp,
       })
       .onConflictDoUpdate({
         target: clinicalSnapshots.patient_case_id,
         set: {
           ...parsed,
+          version: nextVersion,
           updated_at: timestamp,
         },
       })
       .returning(),
   )!;
+}
+
+export async function listSnapshotHistory(
+  patientCaseId: string,
+): Promise<ClinicalSnapshotHistoryEntry[]> {
+  const rows = await db
+    .select()
+    .from(clinicalSnapshotsHistory)
+    .where(eq(clinicalSnapshotsHistory.patient_case_id, patientCaseId))
+    .orderBy(desc(clinicalSnapshotsHistory.version));
+
+  return rows.map((row) => ({ ...row })) as ClinicalSnapshotHistoryEntry[];
 }
 
 export async function getLatestHandoff(patientCaseId: string): Promise<HandoffNote | null> {
@@ -368,8 +440,11 @@ export async function getLatestHandoff(patientCaseId: string): Promise<HandoffNo
   );
 }
 
-export async function createHandoff(patientCaseId: string, body: string): Promise<HandoffNote> {
-  const data = handoffNoteCreateSchema.parse({ body });
+export async function createHandoff(
+  patientCaseId: string,
+  input: z.input<typeof handoffNoteCreateSchema>,
+): Promise<HandoffNote> {
+  const data = handoffNoteCreateSchema.parse(input);
 
   return first(
     await db
@@ -377,6 +452,9 @@ export async function createHandoff(patientCaseId: string, body: string): Promis
       .values({
         patient_case_id: patientCaseId,
         body: data.body,
+        cited_source_ids: data.cited_source_ids,
+        provider: data.provider,
+        model: data.model,
         generated_at: now(),
       })
       .returning(),
@@ -396,9 +474,9 @@ export async function getLatestReview(patientCaseId: string): Promise<Prescripti
 
 export async function createReview(
   patientCaseId: string,
-  items: PrescriptionReviewItem[],
+  input: z.input<typeof prescriptionReviewCreateSchema>,
 ): Promise<PrescriptionReview> {
-  const data = prescriptionReviewCreateSchema.parse({ items });
+  const data = prescriptionReviewCreateSchema.parse(input);
 
   return first(
     await db
@@ -406,10 +484,61 @@ export async function createReview(
       .values({
         patient_case_id: patientCaseId,
         items: data.items,
+        cited_source_ids: data.cited_source_ids,
+        provider: data.provider,
+        model: data.model,
         generated_at: now(),
       })
       .returning(),
   )!;
+}
+
+/* ───────────────────────── Case Questions (F2.7) ───────────────────────── */
+
+export async function listCaseQuestions(
+  patientCaseId: string,
+  limit = 20,
+): Promise<CaseQuestion[]> {
+  return db
+    .select()
+    .from(caseQuestions)
+    .where(eq(caseQuestions.patient_case_id, patientCaseId))
+    .orderBy(desc(caseQuestions.asked_at))
+    .limit(limit);
+}
+
+export async function createCaseQuestion(
+  patientCaseId: string,
+  input: z.input<typeof caseQuestionCreateSchema>,
+): Promise<CaseQuestion> {
+  const data = caseQuestionCreateSchema.parse(input);
+
+  return first(
+    await db
+      .insert(caseQuestions)
+      .values({
+        patient_case_id: patientCaseId,
+        question: data.question,
+        answer: data.answer,
+        cited_source_ids: data.cited_source_ids,
+        provider: data.provider,
+        model: data.model,
+        asked_at: now(),
+      })
+      .returning(),
+  )!;
+}
+
+export async function deleteCaseQuestion(
+  patientCaseId: string,
+  questionId: string,
+): Promise<CaseQuestion | null> {
+  return first(
+    await db
+      .delete(caseQuestions)
+      .where(and(eq(caseQuestions.patient_case_id, patientCaseId), eq(caseQuestions.id, questionId)))
+      .returning(),
+  );
 }
 
 export async function listPending(patientCaseId: string): Promise<PendingItem[]> {

@@ -62,6 +62,12 @@ export type SourceDocument = {
   updated_at: Date;
 };
 
+export type Divergence = {
+  topic: string;
+  description: string;
+  source_ids: string[];
+};
+
 export type ClinicalSnapshot = {
   id: string;
   patient_case_id: string;
@@ -80,19 +86,32 @@ export type ClinicalSnapshot = {
   latest_controls: string;
   pending_items: string;
   plan: string;
+  cited_source_ids: string[];
+  divergences: Divergence[];
+  provider: string;
+  model: string | null;
+  version: number;
   updated_at: Date;
+};
+
+export type ClinicalSnapshotHistoryEntry = Omit<ClinicalSnapshot, "updated_at"> & {
+  generated_at: Date;
 };
 
 export type PrescriptionReviewItem = {
   category: string;
   known_status: string;
   gap: string;
+  cited?: string[];
 };
 
 export type PrescriptionReview = {
   id: string;
   patient_case_id: string;
   items: PrescriptionReviewItem[];
+  cited_source_ids: string[];
+  provider: string;
+  model: string | null;
   generated_at: Date;
 };
 
@@ -100,7 +119,21 @@ export type HandoffNote = {
   id: string;
   patient_case_id: string;
   body: string;
+  cited_source_ids: string[];
+  provider: string;
+  model: string | null;
   generated_at: Date;
+};
+
+export type CaseQuestion = {
+  id: string;
+  patient_case_id: string;
+  question: string;
+  answer: string;
+  cited_source_ids: string[];
+  provider: string;
+  model: string | null;
+  asked_at: Date;
 };
 
 export type PendingItem = {

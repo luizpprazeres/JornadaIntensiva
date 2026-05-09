@@ -4,12 +4,16 @@ import { useState, useTransition } from "react";
 
 import { DocumentBlock, EmptyHint, MetaLine, QuietButton } from "@/components/ui";
 
+type GenerateResult = { body: string; cited: string[]; provider: string; model: string | null };
+
 type Props = {
-  generateAction: () => Promise<string>;
+  generateAction: () => Promise<GenerateResult>;
 };
 
 export function FamilyTab({ generateAction }: Props) {
   const [text, setText] = useState<string>("");
+  const [cited, setCited] = useState<string[]>([]);
+  const [providerLabel, setProviderLabel] = useState<string>("");
   const [isPending, startTransition] = useTransition();
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +23,9 @@ export function FamilyTab({ generateAction }: Props) {
     startTransition(async () => {
       try {
         const result = await generateAction();
-        setText(result);
+        setText(result.body);
+        setCited(result.cited);
+        setProviderLabel(result.model ? `${result.provider} · ${result.model}` : result.provider);
         setGeneratedAt(new Date());
       } catch (e) {
         setError(e instanceof Error ? e.message : "Erro ao gerar resumo familiar");
@@ -44,7 +50,7 @@ export function FamilyTab({ generateAction }: Props) {
           ? `gerado às ${generatedAt.toLocaleTimeString("pt-BR", {
               hour: "2-digit",
               minute: "2-digit",
-            })}`
+            })}${providerLabel ? ` · ${providerLabel}` : ""}`
           : "ainda não gerado nesta sessão"
       }
       actions={
@@ -67,11 +73,21 @@ export function FamilyTab({ generateAction }: Props) {
       {!text ? (
         <EmptyHint>Clique em &quot;Gerar resumo&quot;.</EmptyHint>
       ) : (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          className="w-full min-h-[260px] rounded-chip border border-paper-300 bg-paper-50 p-4 font-serif text-doc-base leading-relaxed text-ink-800 focus:border-sepia-500"
-        />
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            className="w-full min-h-[260px] rounded-chip border border-paper-300 bg-paper-50 p-4 font-serif text-doc-base leading-relaxed text-ink-800 focus:border-sepia-500"
+          />
+          {cited.length > 0 && (
+            <p className="mt-2 text-doc-xs italic text-ink-400">
+              Fontes citadas:{" "}
+              {cited.map((id) => (
+                <code key={id} className="ml-1 doc-mono text-doc-xs">#{id}</code>
+              ))}
+            </p>
+          )}
+        </>
       )}
     </DocumentBlock>
   );
