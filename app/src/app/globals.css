@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Jornada Intensiva — folha sobre mesa.
+   Toda mudança aqui passa pelo DESIGN_DIRECTION.md (anti-AI checklist).
+   ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  background-color: theme('colors.paper.50');
+  color: theme('colors.ink.700');
+  font-family: theme('fontFamily.sans');
+  font-size: 16px; /* iOS evita auto-zoom em inputs */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  /* Textura discreta de papel — sutil, quase imperceptível */
+  background-image:
+    radial-gradient(rgba(28, 26, 23, 0.018) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+
+::selection {
+  background-color: theme('colors.sepia.400');
+  color: theme('colors.paper.50');
+}
+
+/* Foco acessível — outline sépia, sem cor de "produto" */
+*:focus-visible {
+  outline: 2px solid theme('colors.sepia.500');
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+/* Scrollbars contidos */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme('colors.paper.300') transparent;
+}
+
+/* Inputs: aparência documental (sem chrome moderno) */
+input, textarea, select, button {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+input::placeholder, textarea::placeholder {
+  color: theme('colors.paper.400');
+  font-style: italic;
+}
+
+/* Headings serif por padrão dentro do app */
+h1, h2, h3, .doc-heading {
+  font-family: theme('fontFamily.serif');
+  color: theme('colors.ink.900');
+  letter-spacing: theme('letterSpacing.doc-tight');
+}
+
+/* Dados clínicos numéricos sempre mono */
+.doc-mono {
+  font-family: theme('fontFamily.mono');
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smallcaps para nomes técnicos (ATB, DVA, PAM) */
+.doc-smallcaps {
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+}
+
+/* Linha horizontal documental */
+.doc-rule {
+  border: none;
+  border-top: 1px solid theme('colors.paper.300');
+}
