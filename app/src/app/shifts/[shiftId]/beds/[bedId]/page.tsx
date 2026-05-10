@@ -4,20 +4,9 @@ import { notFound } from "next/navigation";
 import { AppFooter } from "@/components/shell/AppFooter";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { PageContainer } from "@/components/shell/PageContainer";
-import {
-  MarkChip,
-  MetaLine,
-  Sheet,
-} from "@/components/ui";
+import { MarkChip, MetaLine, Sheet } from "@/components/ui";
 import { AskCaseTab } from "@/components/tabs/AskCaseTab";
-import { Controls24hTab } from "@/components/tabs/Controls24hTab";
-import { EvolutionTab } from "@/components/tabs/EvolutionTab";
-import { FamilyTab } from "@/components/tabs/FamilyTab";
-import { HandoffTab } from "@/components/tabs/HandoffTab";
-import { ImagingTab } from "@/components/tabs/ImagingTab";
-import { LaboratoryTab } from "@/components/tabs/LaboratoryTab";
-import { PrescriptionTab } from "@/components/tabs/PrescriptionTab";
-import { SourcesTab } from "@/components/tabs/SourcesTab";
+import { IngestTab } from "@/components/tabs/IngestTab";
 import { SummaryTab } from "@/components/tabs/SummaryTab";
 import { TabBar, isTabKey, type TabKey } from "@/components/tabs/TabBar";
 import {
@@ -31,15 +20,18 @@ import {
   listSources,
 } from "@/lib/repos";
 import { formatDateTimeBR } from "@/lib/utils/format";
+import type { IngestedFragment } from "@/types/domain";
 
 import {
-  addSourceAction,
   askCaseAction,
+  confirmIngestAction,
   deleteCaseQuestionAction,
   deleteSourceAction,
+  detectGapsAction,
   generateFamilySummaryAction,
   generateHandoffAction,
   generatePrescriptionReviewAction,
+  ingestTextAction,
   regenerateSnapshotAction,
 } from "./actions";
 
@@ -56,50 +48,67 @@ export default async function BedPage({ params, searchParams }: PageProps) {
   const [shift, patientCase] = await Promise.all([getShift(shiftId), getPatientCase(bedId)]);
   if (!shift || !patientCase || patientCase.shift_id !== shiftId) notFound();
 
-  const [sources, snapshot, handoff, review, snapshotHistory, questionHistory] = await Promise.all([
-    listSources(bedId),
-    getSnapshot(bedId),
-    getLatestHandoff(bedId),
-    getLatestReview(bedId),
-    listSnapshotHistory(bedId),
-    listCaseQuestions(bedId, 10),
-  ]);
+  const [sources, snapshot, handoff, review, snapshotHistory, questionHistory, { gaps, freshness }] =
+    await Promise.all([
+      listSources(bedId),
+      getSnapshot(bedId),
+      getLatestHandoff(bedId),
+      getLatestReview(bedId),
+      listSnapshotHistory(bedId),
+      listCaseQuestions(bedId, 10),
+      detectGapsAction(bedId),
+    ]);
 
   const basePath = `/shifts/${shiftId}/beds/${bedId}`;
 
-  // Server Action wrappers (com shift/bed bindados)
-  const addSource = async (formData: FormData) => {
-    "use server";
-    await addSourceAction(shiftId, bedId, formData);
-  };
-  const deleteSource = async (sourceId: string) => {
-    "use server";
-    await deleteSourceAction(shiftId, bedId, sourceId);
-  };
+  // ── Server Action wrappers ──────────────────────────────────────────────────
+
   const regenerate = async () => {
     "use server";
     await regenerateSnapshotAction(shiftId, bedId);
   };
+
   const handoffGen = async () => {
     "use server";
     await generateHandoffAction(shiftId, bedId);
   };
+
   const reviewGen = async () => {
     "use server";
     await generatePrescriptionReviewAction(shiftId, bedId);
   };
+
   const familyGen = async () => {
     "use server";
     return generateFamilySummaryAction(bedId);
   };
+
+  const ingest = async (rawText: string) => {
+    "use server";
+    return ingestTextAction(shiftId, bedId, rawText);
+  };
+
+  const confirmIngest = async (fragments: IngestedFragment[]) => {
+    "use server";
+    return confirmIngestAction(shiftId, bedId, fragments);
+  };
+
+  const deleteSource = async (sourceId: string) => {
+    "use server";
+    await deleteSourceAction(shiftId, bedId, sourceId);
+  };
+
   const ask = async (question: string) => {
     "use server";
     return askCaseAction(bedId, question);
   };
+
   const deleteQ = async (questionId: string) => {
     "use server";
     await deleteCaseQuestionAction(bedId, questionId);
   };
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -151,27 +160,26 @@ export default async function BedPage({ params, searchParams }: PageProps) {
                 snapshot={snapshot}
                 history={snapshotHistory}
                 divergences={snapshot?.divergences ?? []}
+                gaps={gaps}
+                freshness={freshness}
+                latestHandoff={handoff}
+                latestReview={review}
                 regenerateAction={regenerate}
+                generateHandoffAction={handoffGen}
+                generateFamilySummaryAction={familyGen}
+                generatePrescriptionReviewAction={reviewGen}
               />
             )}
-            {activeTab === "fontes" && (
-              <SourcesTab
-                sources={sources}
-                addSourceAction={addSource}
+
+            {activeTab === "adicionar" && (
+              <IngestTab
+                existingSources={sources}
+                ingestAction={ingest}
+                confirmAction={confirmIngest}
                 deleteSourceAction={deleteSource}
               />
             )}
-            {activeTab === "laboratorio" && <LaboratoryTab sources={sources} />}
-            {activeTab === "imagem" && <ImagingTab sources={sources} />}
-            {activeTab === "controles" && <Controls24hTab sources={sources} />}
-            {activeTab === "prescricao" && (
-              <PrescriptionTab review={review} generateAction={reviewGen} />
-            )}
-            {activeTab === "evolucao" && <EvolutionTab sources={sources} />}
-            {activeTab === "familia" && <FamilyTab generateAction={familyGen} />}
-            {activeTab === "passagem" && (
-              <HandoffTab initial={handoff} generateAction={handoffGen} />
-            )}
+
             {activeTab === "perguntar" && (
               <AskCaseTab
                 askAction={ask}

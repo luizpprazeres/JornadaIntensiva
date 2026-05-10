@@ -136,6 +136,53 @@ export type CaseQuestion = {
   asked_at: Date;
 };
 
+/**
+ * Peça detectada pela IA ao processar uma colagem livre de texto.
+ * Output do verbo `ingestRawText`. Pode virar um SourceDocument após confirmação.
+ */
+export type IngestedFragment = {
+  source_type: SourceType;
+  raw_text: string;
+  source_datetime: Date | null;
+  title: string | null;
+  /** Confiança da classificação automática (0-1). LLM pode usar para sinalizar incerteza. */
+  confidence: number;
+  /** Frase curta explicando por que o LLM classificou assim (visível na preview). */
+  rationale: string | null;
+};
+
+/**
+ * Severidade da lacuna detectada na ficha do leito.
+ * - critical: bloqueia raciocínio clínico (ex.: sem prescrição registrada)
+ * - warning : envelhecendo / não atualizado (ex.: controles 24h há 8h sem update)
+ * - info    : ainda aceitável mas vale registrar (ex.: sem evolução do diarista hoje)
+ */
+export type GapSeverity = "critical" | "warning" | "info";
+
+/**
+ * Lacuna ou item ausente da ficha clínica deste leito.
+ * Output do verbo `detectGaps`.
+ */
+export type Gap = {
+  category: SourceType | "summary" | "plan" | "other";
+  label: string;
+  severity: GapSeverity;
+  why: string;
+  suggested_action: string | null;
+};
+
+/**
+ * Frescor de cada categoria de fonte no leito.
+ * Mostra qual a última atualização e se está envelhecendo.
+ */
+export type FreshnessEntry = {
+  category: SourceType;
+  label: string;
+  last_update_at: Date | null;
+  age_minutes: number | null;
+  status: "fresh" | "aging" | "stale" | "missing";
+};
+
 export type PendingItem = {
   id: string;
   patient_case_id: string;

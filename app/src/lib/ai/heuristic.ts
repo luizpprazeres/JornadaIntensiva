@@ -2,6 +2,10 @@ import type { ClinicalAI, ClinicalSnapshotInput } from "@/lib/ai";
 import type {
   ClinicalSnapshot,
   Divergence,
+  FreshnessEntry,
+  Gap,
+  GapSeverity,
+  IngestedFragment,
   PatientCase,
   PrescriptionReviewItem,
   SourceDocument,
@@ -402,6 +406,152 @@ function scoreLine(line: string, tokens: string[]): number {
   return tokens.filter((token) => normalized.includes(token)).length;
 }
 
+function splitRawTextIntoBlocks(rawText: string): string[] {
+  const normalized = rawText.replace(/\r/g, "").trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const doubleBlankBlocks = normalized
+    .split(/\n\s*\n+/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  if (doubleBlankBlocks.length > 1) {
+    return doubleBlankBlocks;
+  }
+
+  return normalized
+    .split(/(?=\n\s*(?:passagem de plantão|passagem de plantao|evolução|evolucao|prescrição|prescricao|laborat[oó]rio|controles?\s*24h|tc\b|rx\b|usg\b))/i)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
+function classifyBlock(block: string): {
+  sourceType: SourceType;
+  confidence: number;
+  rationaleKeyword: string;
+} {
+  const text = block.toLocaleLowerCase("pt-BR");
+
+  if (/\b(pam|fc|fr|sato2|sat\s*o2|hgt)\b/i.test(block)) {
+    return { sourceType: "controls_24h", confidence: 0.95, rationaleKeyword: "PAM/FC/FR/SatO2/HGT" };
+  }
+  if (/\b(hb|ht|leuco|plq|plaquetas?|na|k|ureia|cr|creatinina)\b/i.test(block)) {
+    return { sourceType: "laboratory", confidence: 0.95, rationaleKeyword: "Hb/Ht/Leuco/Plq/Na/K/Ureia/Cr" };
+  }
+  if (/\b(tc|rx|usg|ecocardiograma|impress[aã]o diagn[oó]stica)\b/i.test(block)) {
+    return { sourceType: "imaging", confidence: 0.95, rationaleKeyword: "TC/RX/USG/ecocardiograma/impressão diagnóstica" };
+  }
+  if (/^\s*passagem de plant[aã]o/i.test(block) || /\bleito\s*\d+\b.*\bleito\s*\d+\b/is.test(block)) {
+    return { sourceType: "handoff", confidence: 0.95, rationaleKeyword: "Passagem de plantão/lista de leitos" };
+  }
+  if (/\bevolu[cç][aã]o\b/i.test(block) && /\b(plano|respirat[oó]rio|hemodin[aâ]mico|renal|infeccioso)\b/i.test(block)) {
+    return { sourceType: "medical_evolution", confidence: 0.9, rationaleKeyword: "Evolução com plano por sistema" };
+  }
+  if (/^\s*(?:\d+[\).:-]|\-)\s+/m.test(block) && /\b(?:mg|ml|mcg|ev|vo|sc|iv|ui)\b/i.test(block)) {
+    return { sourceType: "prescription", confidence: 0.9, rationaleKeyword: "lista numerada com dose/via" };
+  }
+  if (text.includes("prescrição") || text.includes("prescricao")) {
+    return { sourceType: "prescription", confidence: 0.9, rationaleKeyword: "prescrição" };
+  }
+
+  return { sourceType: "physician_note", confidence: 0.7, rationaleKeyword: "texto clínico inespecífico" };
+}
+
+function parseFragmentDate(block: string): Date | null {
+  const dateMatch = /(\d{2})\/(\d{2})(?:\/(\d{2,4}))?/.exec(block);
+
+  if (!dateMatch) {
+    return null;
+  }
+
+  const hourMatch = /(\d{1,2})h(\d{2})?/.exec(block);
+  const currentYear = new Date().getFullYear();
+  const yearRaw = dateMatch[3];
+  const year =
+    yearRaw === undefined
+      ? currentYear
+      : yearRaw.length === 2
+        ? 2000 + Number(yearRaw)
+        : Number(yearRaw);
+  const month = Number(dateMatch[2]) - 1;
+  const day = Number(dateMatch[1]);
+  const hour = hourMatch ? Number(hourMatch[1]) : 0;
+  const minute = hourMatch?.[2] ? Number(hourMatch[2]) : 0;
+  const parsed = new Date(year, month, day, hour, minute);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function titleForFragment(sourceType: SourceType, sourceDatetime: Date | null): string | null {
+  if (!sourceDatetime) {
+    return null;
+  }
+
+  const hour = `${String(sourceDatetime.getHours()).padStart(2, "0")}h${String(
+    sourceDatetime.getMinutes(),
+  ).padStart(2, "0")}`;
+
+  if (sourceType === "laboratory") return `LAB ${hour}`;
+  if (sourceType === "controls_24h") return `Controles ${hour}`;
+  if (sourceType === "imaging") return `Imagem ${hour}`;
+  if (sourceType === "handoff") return `Passagem ${hour}`;
+  if (sourceType === "prescription") return `Prescrição ${hour}`;
+  if (sourceType === "medical_evolution") return `Evolução ${hour}`;
+
+  return null;
+}
+
+const freshnessCategories: Array<{
+  category: SourceType;
+  label: string;
+  windowMinutes: number;
+  essential: boolean;
+}> = [
+  { category: "handoff", label: "Passagem de plantão", windowMinutes: 12 * 60, essential: true },
+  { category: "prescription", label: "Prescrição médica", windowMinutes: 24 * 60, essential: true },
+  { category: "controls_24h", label: "Controles 24h", windowMinutes: 6 * 60, essential: true },
+  { category: "laboratory", label: "Laboratório", windowMinutes: 24 * 60, essential: true },
+  { category: "medical_evolution", label: "Evolução médica", windowMinutes: 12 * 60, essential: false },
+  { category: "imaging", label: "Imagem", windowMinutes: 7 * 24 * 60, essential: false },
+  { category: "diarist_evolution", label: "Evolução do diarista", windowMinutes: 24 * 60, essential: false },
+];
+
+const severityRank: Record<GapSeverity, number> = {
+  critical: 0,
+  warning: 1,
+  info: 2,
+};
+
+function mostRecentSourceDate(sources: SourceDocument[]): Date | null {
+  return sources.reduce<Date | null>((latest, source) => {
+    const candidate = source.source_datetime ?? source.created_at;
+
+    if (!latest || candidate.getTime() > latest.getTime()) {
+      return candidate;
+    }
+
+    return latest;
+  }, null);
+}
+
+function freshnessStatus(
+  ageMinutes: number | null,
+  windowMinutes: number,
+): FreshnessEntry["status"] {
+  if (ageMinutes === null) return "missing";
+  if (ageMinutes <= windowMinutes) return "fresh";
+  if (ageMinutes <= windowMinutes * 2) return "aging";
+  return "stale";
+}
+
+function hoursText(minutes: number): string {
+  const hours = minutes / 60;
+  return `${hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)}h`;
+}
+
 export function createHeuristicAI(): ClinicalAI {
   return {
     providerName: "heuristic",
@@ -688,6 +838,107 @@ export function createHeuristicAI(): ClinicalAI {
       }
 
       return { divergences, provider: "heuristic", model: null };
+    },
+
+    async ingestRawText({ patientCase, rawText }) {
+      const blocks = splitRawTextIntoBlocks(rawText);
+      const fragments: IngestedFragment[] = blocks.map((block) => {
+        const classification = classifyBlock(block);
+        const sourceDatetime = parseFragmentDate(block);
+
+        return {
+          source_type: classification.sourceType,
+          raw_text: block,
+          source_datetime: sourceDatetime,
+          title: titleForFragment(classification.sourceType, sourceDatetime),
+          confidence: classification.confidence,
+          rationale: `Detectado pela heurística baseada em keywords ${classification.rationaleKeyword}.`,
+        };
+      });
+
+      return {
+        fragments,
+        summary: `Detectados ${fragments.length} fragmentos via heurística para ${patientCase.bed_label}.`,
+        provider: "heuristic",
+        model: null,
+      };
+    },
+
+    async detectGaps({ patientCase, sources }) {
+      assertSinglePatientCase(patientCase, sources);
+
+      const currentTime = Date.now();
+      const freshness: FreshnessEntry[] = freshnessCategories.map((config) => {
+        const categorySources = sources.filter((source) => source.source_type === config.category);
+        const lastUpdateAt = mostRecentSourceDate(categorySources);
+        const ageMinutes =
+          lastUpdateAt === null ? null : Math.max(0, Math.round((currentTime - lastUpdateAt.getTime()) / 60000));
+
+        return {
+          category: config.category,
+          label: config.label,
+          last_update_at: lastUpdateAt,
+          age_minutes: ageMinutes,
+          status: freshnessStatus(ageMinutes, config.windowMinutes),
+        };
+      });
+
+      const gaps = freshnessCategories.flatMap<Gap>((config) => {
+        const entry = freshness.find((item) => item.category === config.category);
+
+        if (!entry) {
+          return [];
+        }
+
+        if (entry.status === "missing") {
+          if (config.essential) {
+            return [
+              {
+                category: config.category,
+                label: `${config.label} não registrada`,
+                severity: "critical",
+                why: "Não há fonte deste tipo neste leito.",
+                suggested_action: `Cole ${config.label} na aba Adicionar.`,
+              },
+            ];
+          }
+
+          if (config.category === "diarist_evolution") {
+            return [
+              {
+                category: config.category,
+                label: "Evolução do diarista não registrada",
+                severity: "info",
+                why: "Não há fonte deste tipo neste leito.",
+                suggested_action: "Cole evolução do diarista na aba Adicionar.",
+              },
+            ];
+          }
+
+          return [];
+        }
+
+        if (entry.status === "stale" && entry.age_minutes !== null) {
+          return [
+            {
+              category: config.category,
+              label: `${config.label} desatualizados`,
+              severity: "warning",
+              why: `Última atualização há ${hoursText(entry.age_minutes)} (esperado: ${hoursText(config.windowMinutes)}).`,
+              suggested_action: `Cole ${config.label} atualizado na aba Adicionar.`,
+            },
+          ];
+        }
+
+        return [];
+      });
+
+      return {
+        gaps: gaps.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]).slice(0, 6),
+        freshness,
+        provider: "heuristic",
+        model: null,
+      };
     },
   };
 }

@@ -15,6 +15,7 @@
     "db:studio": "drizzle-kit studio",
     "seed": "tsx src/lib/db/seed.ts",
     "smoke:llm": "tsx --env-file=.env.local scripts/smoke-llm.ts",
+    "smoke:ingest": "tsx --env-file=.env.local scripts/smoke-ingest.ts",
     "ip": "node -e \"const os=require('os');const n=os.networkInterfaces();for(const k of Object.keys(n)){for(const x of n[k]){if(x.family==='IPv4'&&!x.internal)console.log(k+': http://'+x.address+':3000')}}\""
   },
   "dependencies": {

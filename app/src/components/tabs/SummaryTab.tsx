@@ -1,15 +1,41 @@
-import { DocumentBlock, EmptyHint, MarkChip, MetaLine, QuietButton, SectionDivider } from "@/components/ui";
+import {
+  DocumentBlock,
+  EmptyHint,
+  MarkChip,
+  MetaLine,
+  QuietButton,
+  SectionDivider,
+} from "@/components/ui";
 import type {
   ClinicalSnapshot,
   ClinicalSnapshotHistoryEntry,
   Divergence,
+  FreshnessEntry,
+  Gap,
+  GapSeverity,
+  HandoffNote,
   PatientCase,
+  PrescriptionReview,
 } from "@/types/domain";
+import {
+  HandoffArtifactCard,
+  FamilyArtifactCard,
+  PrescriptionArtifactCard,
+} from "@/components/tabs/ArtifactCard";
 import { formatDateTimeBR } from "@/lib/utils/format";
+
+// ─── Constants ─────────────────────────────────────────────────────────────────
 
 type ClinicalDataKey = keyof Omit<
   ClinicalSnapshot,
-  "id" | "patient_case_id" | "cited_source_ids" | "divergences" | "provider" | "model" | "version" | "updated_at"
+  | "id"
+  | "patient_case_id"
+  | "cited_source_ids"
+  | "divergences"
+  | "provider"
+  | "model"
+  | "version"
+  | "updated_at"
 >;
 
 const SECTIONS: Array<{ key: ClinicalDataKey; label: string }> = [
@@ -30,15 +56,80 @@ const SECTIONS: Array<{ key: ClinicalDataKey; label: string }> = [
   { key: "plan", label: "Plano" },
 ];
 
+// ─── Helpers ────────────────────────────────────────────────────────────────────
+
+function gapTone(severity: GapSeverity): "alert" | "warn" | "neutral" {
+  if (severity === "critical") return "alert";
+  if (severity === "warning") return "warn";
+  return "neutral";
+}
+
+function gapLabel(severity: GapSeverity): string {
+  if (severity === "critical") return "crítico";
+  if (severity === "warning") return "atenção";
+  return "info";
+}
+
+function freshnessTone(status: FreshnessEntry["status"]): "ok" | "warn" | "alert" {
+  if (status === "fresh") return "ok";
+  if (status === "aging") return "warn";
+  return "alert";
+}
+
+function freshnessLabel(status: FreshnessEntry["status"]): string {
+  if (status === "fresh") return "fresco";
+  if (status === "aging") return "envelhecendo";
+  if (status === "stale") return "desatualizado";
+  return "ausente";
+}
+
+function formatAge(minutes: number | null): string {
+  if (minutes === null) return "—";
+  if (minutes < 60) return `${minutes}min`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / 1440)}d`;
+}
+
+// ─── Props ──────────────────────────────────────────────────────────────────────
+
+type FamilySummaryResult = {
+  body: string;
+  cited: string[];
+  provider: string;
+  model: string | null;
+};
+
 type Props = {
   patientCase: PatientCase;
   snapshot: ClinicalSnapshot | null;
   history: ClinicalSnapshotHistoryEntry[];
   divergences: Divergence[];
+  gaps: Gap[];
+  freshness: FreshnessEntry[];
+  latestHandoff: HandoffNote | null;
+  latestReview: PrescriptionReview | null;
   regenerateAction: () => Promise<void>;
+  generateHandoffAction: () => Promise<void>;
+  generateFamilySummaryAction: () => Promise<FamilySummaryResult>;
+  generatePrescriptionReviewAction: () => Promise<void>;
 };
 
-export function SummaryTab({ patientCase, snapshot, history, divergences, regenerateAction }: Props) {
+// ─── Component ─────────────────────────────────────────────────────────────────
+
+export function SummaryTab({
+  patientCase,
+  snapshot,
+  history,
+  divergences,
+  gaps,
+  freshness,
+  latestHandoff,
+  latestReview,
+  regenerateAction,
+  generateHandoffAction,
+  generateFamilySummaryAction,
+  generatePrescriptionReviewAction,
+}: Props) {
   const metaParts = snapshot
     ? [
         `atualizada em ${formatDateTimeBR(snapshot.updated_at)}`,
@@ -64,7 +155,7 @@ export function SummaryTab({ patientCase, snapshot, history, divergences, regene
     >
       {!snapshot ? (
         <EmptyHint>
-          Adicione fontes ao leito (passagem, evolução, exames) e clique em &quot;Gerar ficha viva&quot;.
+          Adicione fontes ao leito (aba &quot;Adicionar&quot;) e clique em &quot;Gerar ficha viva&quot;.
         </EmptyHint>
       ) : (
         <>
@@ -73,6 +164,7 @@ export function SummaryTab({ patientCase, snapshot, history, divergences, regene
             {patientCase.age != null ? `, ${patientCase.age}a` : null}
           </MetaLine>
 
+          {/* ── Divergências ── */}
           {divergences.length > 0 && (
             <>
               <SectionDivider label="Divergências detectadas" />
@@ -92,6 +184,61 @@ export function SummaryTab({ patientCase, snapshot, history, divergences, regene
             </>
           )}
 
+          {/* ── Lacunas ── */}
+          {gaps.length > 0 && (
+            <>
+              <SectionDivider label="Lacunas deste leito" />
+              <ul className="space-y-3">
+                {gaps.map((gap, idx) => (
+                  <li key={idx} className="border-l-2 border-paper-300 pl-4">
+                    <div className="flex items-baseline gap-2">
+                      <MarkChip tone={gapTone(gap.severity)}>{gapLabel(gap.severity)}</MarkChip>
+                      <span className="font-serif text-doc-base text-ink-800">{gap.label}</span>
+                    </div>
+                    <p className="mt-1 text-doc-sm text-ink-600">{gap.why}</p>
+                    {gap.suggested_action && (
+                      <p className="mt-0.5 text-doc-xs italic text-ink-400">{gap.suggested_action}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {/* ── Frescor das fontes ── */}
+          {freshness.length > 0 && (
+            <>
+              <SectionDivider label="Frescor das fontes" />
+              <table className="w-full border-collapse text-doc-xs">
+                <thead>
+                  <tr className="border-b border-paper-300 text-left">
+                    <th className="py-1.5 pr-3 doc-smallcaps font-sans text-ink-500">Categoria</th>
+                    <th className="py-1.5 pr-3 doc-smallcaps font-sans text-ink-500">Última atualização</th>
+                    <th className="py-1.5 pr-3 doc-smallcaps font-sans text-ink-500">Idade</th>
+                    <th className="py-1.5 doc-smallcaps font-sans text-ink-500">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {freshness.map((entry) => (
+                    <tr key={entry.category} className="border-b border-paper-100 align-middle">
+                      <td className="py-1.5 pr-3 text-ink-700">{entry.label}</td>
+                      <td className="py-1.5 pr-3 text-ink-500">
+                        {formatDateTimeBR(entry.last_update_at) ?? "—"}
+                      </td>
+                      <td className="py-1.5 pr-3 text-ink-500">{formatAge(entry.age_minutes)}</td>
+                      <td className="py-1.5">
+                        <MarkChip tone={freshnessTone(entry.status)}>
+                          {freshnessLabel(entry.status)}
+                        </MarkChip>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {/* ── Campos da ficha ── */}
           <SectionDivider />
           <dl className="grid grid-cols-1 gap-4">
             {SECTIONS.map((s) => {
@@ -109,6 +256,21 @@ export function SummaryTab({ patientCase, snapshot, history, divergences, regene
             })}
           </dl>
 
+          {/* ── Artefatos inline ── */}
+          <SectionDivider label="Artefatos" />
+          <div className="space-y-3">
+            <HandoffArtifactCard
+              initial={latestHandoff}
+              generateAction={generateHandoffAction}
+            />
+            <FamilyArtifactCard generateAction={generateFamilySummaryAction} />
+            <PrescriptionArtifactCard
+              initial={latestReview}
+              generateAction={generatePrescriptionReviewAction}
+            />
+          </div>
+
+          {/* ── Versões anteriores ── */}
           {history.length > 0 && (
             <details className="mt-6">
               <summary className="cursor-pointer list-none select-none font-sans text-doc-xs uppercase tracking-[0.08em] text-ink-400 hover:text-ink-600 transition-colors">

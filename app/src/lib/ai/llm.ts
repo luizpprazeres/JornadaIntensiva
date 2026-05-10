@@ -8,10 +8,12 @@ import type {
   DivergenceResult,
   GeneratedArtifact,
   GeneratedChecklist,
+  GapsResult,
+  IngestResult,
 } from "@/lib/ai";
 import { createHeuristicAI, pt } from "@/lib/ai/heuristic";
 import { loadPrompt, type PromptName } from "@/lib/prompts/loader";
-import type { Divergence, PatientCase, SourceDocument } from "@/types/domain";
+import { SOURCE_TYPES, type Divergence, type FreshnessEntry, type PatientCase, type SourceDocument } from "@/types/domain";
 
 export type LLMConfig = {
   provider: "openai";
@@ -69,6 +71,43 @@ const divergenceResponseSchema = z.object({
     }),
   ),
 });
+
+const ingestResponseSchema = z.object({
+  summary: z.string(),
+  fragments: z.array(
+    z.object({
+      source_type: z.enum(SOURCE_TYPES),
+      raw_text: z.string(),
+      source_datetime: z.string().nullable(),
+      title: z.string().nullable(),
+      confidence: z.number().min(0).max(1),
+      rationale: z.string().nullable(),
+    }),
+  ),
+});
+
+const gapsResponseSchema = z.object({
+  gaps: z.array(
+    z.object({
+      category: z.string(),
+      label: z.string(),
+      severity: z.enum(["critical", "warning", "info"]),
+      why: z.string(),
+      suggested_action: z.string().nullable(),
+    }),
+  ),
+  freshness: z.array(
+    z.object({
+      category: z.enum(SOURCE_TYPES),
+      label: z.string(),
+      last_update_at: z.string().nullable(),
+      age_minutes: z.number().nullable(),
+      status: z.enum(["fresh", "aging", "stale", "missing"]),
+    }),
+  ),
+});
+
+const gapCategoryValues = [...SOURCE_TYPES, "summary", "plan", "other"] as const;
 
 const prescriptionCategories = [
   "ATB",
@@ -208,6 +247,78 @@ function collectCitations(body: string, sources: SourceDocument[]): string[] {
 function normalizeCitations(cited: string[], sources: SourceDocument[]): string[] {
   const valid = new Set(sources.map((source) => source.id));
   return Array.from(new Set(cited.filter((id) => valid.has(id))));
+}
+
+function parseNullableDate(value: string | null): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatExistingSourcesSummary(sources: SourceDocument[]): string {
+  if (sources.length === 0) {
+    return "Nenhuma fonte existente.";
+  }
+
+  return sources
+    .map((source) => {
+      const excerpt = source.raw_text.replace(/\s+/g, " ").slice(0, 100);
+      return `- ${source.source_type} | ${pt(source.source_datetime)} | ${source.id} | ${excerpt}`;
+    })
+    .join("\n");
+}
+
+function buildIngestUserMessage(input: {
+  patientCase: PatientCase;
+  existingSources: SourceDocument[];
+  rawText: string;
+}): string {
+  return [
+    "Identifique e fragmente o texto bruto em SourceDocuments candidatos para este leito.",
+    "Responda em JSON conforme schema.",
+    "\nIDENTIFICAÇÃO DO LEITO",
+    formatPatientCase(input.patientCase),
+    "\nFONTES EXISTENTES RESUMIDAS",
+    formatExistingSourcesSummary(input.existingSources),
+    "\nTEXTO BRUTO PARA INGESTÃO:",
+    input.rawText,
+  ].join("\n");
+}
+
+function buildGapsUserMessage(input: {
+  patientCase: PatientCase;
+  sources: SourceDocument[];
+  snapshot?: unknown;
+  currentTime: Date;
+}): string {
+  const sourceRows =
+    input.sources.length === 0
+      ? "Nenhuma fonte inserida neste leito."
+      : input.sources
+          .map(
+            (source) =>
+              `- ${source.source_type} | ${source.source_datetime?.toISOString() ?? source.created_at.toISOString()} | ${source.id}`,
+          )
+          .join("\n");
+
+  return [
+    "Detecte lacunas e frescor das fontes deste leito.",
+    "Responda em JSON conforme schema.",
+    "\nIDENTIFICAÇÃO DO LEITO",
+    formatPatientCase(input.patientCase),
+    `\nHora atual: ${input.currentTime.toISOString()}`,
+    input.snapshot ? `\nSNAPSHOT\n${JSON.stringify(input.snapshot, null, 2)}` : "\nSNAPSHOT\nNão disponível.",
+    "\nFONTES",
+    sourceRows,
+  ].join("\n");
+}
+
+function normalizeGapCategory(category: string): (typeof gapCategoryValues)[number] {
+  const match = gapCategoryValues.find((value) => value === category);
+  return match ?? "other";
 }
 
 function openAIErrorMessage(error: unknown): string {
@@ -476,6 +587,65 @@ export async function createLLMAI(config: LLMConfig): Promise<ClinicalAI> {
 
       return {
         divergences,
+        provider,
+        model: config.model,
+      };
+    },
+
+    async ingestRawText({ patientCase, existingSources, rawText }): Promise<IngestResult> {
+      assertSinglePatientCase(patientCase, existingSources);
+
+      const response = await complete({
+        promptName: "ingest",
+        responseFormat: { type: "json_object" },
+        user: buildIngestUserMessage({ patientCase, existingSources, rawText }),
+      });
+
+      const parsed = ingestResponseSchema.parse(parseJsonObject(response));
+
+      return {
+        summary: parsed.summary,
+        fragments: parsed.fragments.map((fragment) => ({
+          source_type: fragment.source_type,
+          raw_text: fragment.raw_text,
+          source_datetime: parseNullableDate(fragment.source_datetime),
+          title: fragment.title,
+          confidence: fragment.confidence,
+          rationale: fragment.rationale,
+        })),
+        provider,
+        model: config.model,
+      };
+    },
+
+    async detectGaps({ patientCase, sources, snapshot }): Promise<GapsResult> {
+      assertSinglePatientCase(patientCase, sources);
+      const currentTime = new Date();
+
+      const response = await complete({
+        promptName: "gap-detection",
+        responseFormat: { type: "json_object" },
+        user: buildGapsUserMessage({ patientCase, sources, snapshot, currentTime }),
+      });
+
+      const parsed = gapsResponseSchema.parse(parseJsonObject(response));
+      const freshness: FreshnessEntry[] = parsed.freshness.map((entry) => ({
+        category: entry.category,
+        label: entry.label,
+        last_update_at: parseNullableDate(entry.last_update_at),
+        age_minutes: entry.age_minutes,
+        status: entry.status,
+      }));
+
+      return {
+        gaps: parsed.gaps.map((gap) => ({
+          category: normalizeGapCategory(gap.category),
+          label: gap.label,
+          severity: gap.severity,
+          why: gap.why,
+          suggested_action: gap.suggested_action,
+        })),
+        freshness,
         provider,
         model: config.model,
       };

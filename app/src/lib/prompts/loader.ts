@@ -10,6 +10,8 @@ export const PROMPT_NAMES = [
   "prescription-review",
   "family-summary",
   "case-question-answering",
+  "ingest",
+  "gap-detection",
 ] as const;
 
 export type PromptName = (typeof PROMPT_NAMES)[number];

@@ -2,6 +2,9 @@ import { createHeuristicAI } from "@/lib/ai/heuristic";
 import type {
   ClinicalSnapshot,
   Divergence,
+  FreshnessEntry,
+  Gap,
+  IngestedFragment,
   PatientCase,
   PrescriptionReviewItem,
   SourceDocument,
@@ -43,6 +46,28 @@ export type AskCaseResult = {
 
 export type DivergenceResult = {
   divergences: Divergence[];
+  provider: string;
+  model: string | null;
+};
+
+/**
+ * Resultado de uma ingestão livre de texto: peças fragmentadas + classificadas.
+ * O `IngestTab` mostra como preview antes de persistir.
+ */
+export type IngestResult = {
+  fragments: IngestedFragment[];
+  /** Resumo de uma frase do que a IA detectou (mostrar no preview). */
+  summary: string;
+  provider: string;
+  model: string | null;
+};
+
+/**
+ * Resultado de detecção de lacunas + frescor das fontes do leito.
+ */
+export type GapsResult = {
+  gaps: Gap[];
+  freshness: FreshnessEntry[];
   provider: string;
   model: string | null;
 };
@@ -98,6 +123,30 @@ export interface ClinicalAI {
     patientCase: PatientCase;
     sources: SourceDocument[];
   }): Promise<DivergenceResult>;
+
+  /**
+   * Ingestão tipo ChatGPT (F2.5).
+   * Recebe um texto livre (pode ter várias seções misturadas) e retorna um array
+   * de IngestedFragments, cada um classificado por `source_type` com data extraída.
+   * O usuário confirma na UI antes de persistir como SourceDocuments.
+   */
+  ingestRawText(input: {
+    patientCase: PatientCase;
+    existingSources: SourceDocument[];
+    rawText: string;
+  }): Promise<IngestResult>;
+
+  /**
+   * Detecção de lacunas + frescor das fontes do leito (F2.5).
+   * Para uma UTI típica, espera-se ter handoff, prescription, controls_24h,
+   * laboratory, e medical_evolution atualizados em janelas razoáveis.
+   * Retorna lista de gaps (ausentes/críticos) + freshness (idade de cada categoria).
+   */
+  detectGaps(input: {
+    patientCase: PatientCase;
+    sources: SourceDocument[];
+    snapshot?: ClinicalSnapshot | null;
+  }): Promise<GapsResult>;
 }
 
 let ai: ClinicalAI | null = null;

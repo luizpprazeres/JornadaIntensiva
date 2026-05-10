@@ -2,31 +2,13 @@ import Link from "next/link";
 
 import { cn } from "@/lib/utils/cn";
 
-export const TAB_KEYS = [
-  "resumo",
-  "fontes",
-  "laboratorio",
-  "imagem",
-  "controles",
-  "prescricao",
-  "evolucao",
-  "familia",
-  "passagem",
-  "perguntar",
-] as const;
+export const TAB_KEYS = ["resumo", "adicionar", "perguntar"] as const;
 
 export type TabKey = (typeof TAB_KEYS)[number];
 
 const LABELS: Record<TabKey, string> = {
   resumo: "Resumo",
-  fontes: "Fontes",
-  laboratorio: "Laboratório",
-  imagem: "Imagem",
-  controles: "Controles",
-  prescricao: "Prescrição",
-  evolucao: "Evolução",
-  familia: "Família",
-  passagem: "Passagem",
+  adicionar: "Adicionar",
   perguntar: "Perguntar ao caso",
 };
 

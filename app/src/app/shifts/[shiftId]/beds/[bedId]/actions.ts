@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { getAI } from "@/lib/ai";
+import { getAI, type GapsResult, type IngestResult } from "@/lib/ai";
 import {
   createCaseQuestion,
   createHandoff,
@@ -19,6 +19,7 @@ import {
   upsertSnapshot,
   type SourceType,
 } from "@/lib/repos";
+import type { IngestedFragment } from "@/types/domain";
 
 const SOURCE_TYPE_VALUES = [
   "handoff",
@@ -69,6 +70,61 @@ export async function addSourceAction(
   });
 
   revalidatePath(bedPath(shiftId, patientCaseId));
+}
+
+export async function ingestTextAction(
+  shiftId: string,
+  patientCaseId: string,
+  rawText: string,
+): Promise<IngestResult> {
+  const text = rawText.trim();
+  if (!text) throw new Error("Texto bruto é obrigatório");
+
+  const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
+  const ai = await getAI();
+
+  return ai.ingestRawText({
+    patientCase,
+    existingSources: sources,
+    rawText: text,
+  });
+}
+
+export async function confirmIngestAction(
+  shiftId: string,
+  patientCaseId: string,
+  fragments: IngestedFragment[],
+): Promise<{ ok: true; count: number }> {
+  const validFragments = fragments.filter((fragment) => fragment.raw_text.trim().length > 0);
+
+  await Promise.all(
+    validFragments.map((fragment) =>
+      createSource({
+        patient_case_id: patientCaseId,
+        source_type: fragment.source_type,
+        title: fragment.title ?? undefined,
+        raw_text: fragment.raw_text,
+        source_datetime: fragment.source_datetime,
+        structured_summary: fragment.rationale,
+      }),
+    ),
+  );
+
+  revalidatePath(bedPath(shiftId, patientCaseId));
+
+  void regenerateSnapshotAction(shiftId, patientCaseId).catch((error: unknown) => {
+    console.warn("[ingest] falha ao regenerar snapshot após confirmação:", error);
+  });
+
+  return { ok: true, count: validFragments.length };
+}
+
+export async function detectGapsAction(patientCaseId: string): Promise<GapsResult> {
+  const { patientCase, sources } = await loadCaseAndSources(patientCaseId);
+  const snapshot = await getSnapshot(patientCaseId);
+  const ai = await getAI();
+
+  return ai.detectGaps({ patientCase, sources, snapshot });
 }
 
 export async function updateSourceSummaryAction(
